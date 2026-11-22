@@ -1,0 +1,66 @@
+name: Build
+
+concurrency:
+  group: build
+  cancel-in-progress: true
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths-ignore:
+      - '*.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Build plugins
+        run: gradle make makePluginsJson --no-daemon --stacktrace
+
+      - name: Publish to builds branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          OUT="$RUNNER_TEMP/out"
+          mkdir -p "$OUT"
+          find . -path '*/build/*.cs3' -exec cp {} "$OUT/" \;
+          cp build/plugins.json "$OUT/plugins.json"
+          (jq 'del(.[]?.jarUrl, .[]?.jarFileSize, .[]?.jarHash)' "$OUT/plugins.json" > "$OUT/plugins.tmp" && mv "$OUT/plugins.tmp" "$OUT/plugins.json") || true
+          cat > "$OUT/repo.json" <<EOF
+          {
+            "name": "Kick (CloudStream)",
+            "description": "Plugin da Kick para o CloudStream",
+            "manifestVersion": 1,
+            "pluginLists": [
+              "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/builds/plugins.json"
+            ]
+          }
+          EOF
+          cd "$OUT"
+          git init -b builds
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git add .
+          git commit -m "Build $GITHUB_SHA"
+          git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" builds
+          echo "Link do repositório para o CloudStream: https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/builds/repo.json" >> "$GITHUB_STEP_SUMMARY"
